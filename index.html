@@ -1,0 +1,816 @@
+"""
+============================================================
+ Dashboard — Streamlit (หน้าจอหลั้่งของระบบ) — Professional Dark Theme
+============================================================
+รัน:  streamlit run app/dashboard.py
+แสดง: สถานะเครื่องมือ (real-time), Live Console, KPI, Fleet Health,
+      Usage Analytics, Calibration, ประวัติการยืม, Alerts, QR Check-out
+"""
+import os
+import sys
+import time
+from datetime import datetime
+
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config
+from app import database as db
+from app.detector import get_detector
+from app import line_alert
+
+# ---------- page setup ----------
+st.set_page_config(page_title=config.APP_TITLE, page_icon="🛠️", layout="wide")
+
+# ---------- ensure DB ----------
+if not os.path.exists(config.DB_PATH):
+    db.init_db()
+
+detector = get_detector()
+
+# ---------- custom css (professional dark theme) ----------
+st.markdown("""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap');
+  :root {
+    --bg:      #0B1220;
+    --card:    #111C2E;
+    --card-2:  #16233A;
+    --border:  rgba(148, 163, 184, .14);
+    --text:    #E7EEF6;
+    --muted:   #8DA2B8;
+    --teal:    #2DD4BF;
+    --rose:    #FB7185;
+    --amber:   #FBBF24;
+    --sky:     #38BDF8;
+  }
+  html, body, [class*="css"] {
+    font-family:'Inter','Noto Sans Thai','Segoe UI',sans-serif;
+  }
+  /* ตัวเลข + โค้ด : monospace-ish tabular */
+  .console .seg b, .kpi .num, .chip .slot, .chip .conf,
+  .row-item .code, .ribbon-legend b { font-variant-numeric:tabular-nums; }
+  .stApp{
+    background:
+      radial-gradient(900px 400px at 85% -10%, rgba(56,189,248,.07), transparent 60%),
+      radial-gradient(900px 480px at -10% 110%, rgba(45,212,191,.06), transparent 60%),
+      var(--bg);
+  }
+
+  /* ---------- sections ---------- */
+  .sec-title{
+    display:flex; align-items:baseline; gap:10px; margin: 24px 0 12px;
+    font-size:15px; font-weight:700; letter-spacing:.4px; color:var(--text);
+  }
+  .sec-title::before{
+    content:''; display:inline-block; width:4px; height:16px; border-radius:4px;
+    background:linear-gradient(180deg, var(--teal), var(--sky));
+    transform:translateY(2px);
+  }
+  .sec-title .num{
+    font-size:10px; font-weight:800; letter-spacing:1.5px; color:var(--sky);
+    background:rgba(56,189,248,.1); border:1px solid rgba(56,189,248,.25);
+    padding:2px 7px; border-radius:6px;
+  }
+  .sec-sub{ color:var(--muted); font-size:12px; font-weight:500; }
+
+  /* ---------- live console strip ---------- */
+  .console{
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    background:rgba(17,28,46,.55); border:1px solid var(--border);
+    border-radius:13px; padding:9px 14px; margin-bottom:18px;
+    backdrop-filter:blur(8px);
+  }
+  .console .seg{
+    display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted);
+    padding:6px 13px; border-radius:9px; background:rgba(11,18,32,.5);
+    border:1px solid var(--border); white-space:nowrap;
+  }
+  .console .seg b{ color:var(--text); font-weight:700; font-variant-numeric:tabular-nums; }
+  .console .sep{ width:1px; height:22px; background:var(--border); margin:0 2px; }
+  .live-dot{ width:8px; height:8px; border-radius:50%; background:var(--teal);
+    animation:pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse{
+    0%,100%{ box-shadow:0 0 0 0 rgba(45,212,191,.45);}
+    50%    { box-shadow:0 0 0 6px rgba(45,212,191,0);}
+  }
+  @keyframes blink-soft{ 0%,100%{opacity:1} 50%{opacity:.5} }
+  .blink{ animation:blink-soft 1.4s ease-in-out infinite; }
+
+  /* ---------- brand header ---------- */
+  .brand{
+    display:flex; align-items:center; gap:14px; padding:18px 22px;
+    background:linear-gradient(135deg, rgba(22,35,58,.95), rgba(17,28,46,.55));
+    border:1px solid var(--border); border-radius:18px;
+    box-shadow:0 10px 34px rgba(0,0,0,.35);
+    position:relative; overflow:hidden;
+  }
+  .brand::after{
+    content:''; position:absolute; top:0; left:0; right:0; height:3px;
+    background:linear-gradient(90deg, var(--teal), var(--sky), transparent 70%);
+  }
+  .brand-icon{
+    width:54px; height:54px; border-radius:15px; display:flex;
+    align-items:center; justify-content:center; font-size:27px; flex-shrink:0;
+    background:rgba(45,212,191,.12); border:1px solid rgba(45,212,191,.35);
+    box-shadow:inset 0 0 18px rgba(45,212,191,.12);
+  }
+  .brand h1{ margin:0; font-size:21px; font-weight:800; color:var(--text); letter-spacing:.2px;}
+  .brand p{ margin:3px 0 0; color:var(--muted); font-size:12.5px; }
+
+  /* ---------- mode badge ---------- */
+  .mode{
+    display:inline-flex; align-items:center; gap:8px; padding:7px 15px;
+    border-radius:999px; font-size:12.5px; font-weight:700; letter-spacing:.6px;
+    border:1px solid var(--border); background:var(--card);
+  }
+  .mode .dot{ width:9px; height:9px; border-radius:50%; }
+  .mode-demo .dot{ background:var(--amber); box-shadow:0 0 10px var(--amber); }
+  .mode-live .dot{ background:var(--teal); box-shadow:0 0 10px var(--teal); }
+  .mode-demo { color:#FCD34D; }
+  .mode-live { color:#5EEAD4; border-color:rgba(45,212,191,.4); }
+
+  /* ---------- KPI cards ---------- */
+  .kpi{
+    position:relative; overflow:hidden; border-radius:16px; padding:16px 18px;
+    background:var(--card); border:1px solid var(--border); margin-bottom:4px;
+    transition:transform .15s ease, border-color .15s ease;
+  }
+  .kpi:hover{ transform:translateY(-2px); border-color:rgba(45,212,191,.35); }
+  .kpi .num{ font-size:33px; font-weight:800; line-height:1.1; font-variant-numeric:tabular-nums;}
+  .kpi .lbl{ color:var(--muted); font-size:11.5px; font-weight:600; letter-spacing:.8px;
+             text-transform:uppercase; margin-top:3px;}
+  .kpi .ic{
+    position:absolute; right:14px; top:14px; width:36px; height:36px;
+    border-radius:11px; display:flex; align-items:center; justify-content:center; font-size:17px;
+  }
+  .kpi .bar{ height:5px; border-radius:4px; background:rgba(148,163,184,.12);
+             margin-top:12px; overflow:hidden;}
+  .kpi .bar i{ display:block; height:100%; border-radius:4px; transition:width .6s ease; }
+  .kpi .pct{ font-size:10.5px; color:var(--muted); margin-top:6px;
+             font-variant-numeric:tabular-nums; letter-spacing:.3px;}
+  .kpi.total .num{ color:var(--text); }   .kpi.total .ic{ background:rgba(56,189,248,.12); }
+  .kpi.ok    .num{ color:var(--teal);  }  .kpi.ok    .ic{ background:rgba(45,212,191,.12); }
+  .kpi.miss  .num{ color:var(--rose);  }  .kpi.miss  .ic{ background:rgba(251,113,133,.12); }
+  .kpi.off   .num{ color:var(--amber); }  .kpi.off   .ic{ background:rgba(251,191,36,.12); }
+  .kpi.borrow .num{ color:var(--sky); }  .kpi.borrow .ic{ background:rgba(56,189,248,.12); }
+  .kpi.total::after,.kpi.ok::after,.kpi.miss::after,,.kpi.borrow::after{
+    content:''; position:absolute; left:0; right:0; bottom:0; height:3px; }
+  .kpi.total::after{ background:linear-gradient(90deg,var(--sky),transparent); }
+  .kpi.ok::after   { background:linear-gradient(90deg,var(--teal),transparent); }
+  .kpi.miss::after { background:linear-gradient(90deg,var(--rose),transparent); }
+  .kpi.off::after  { background:linear-gradient(90deg,var(--amber),transparent); }
+  .kpi.borrow::after { background:linear-gradient(90deg,var(--sky),transparent); }
+
+  /* ---------- fleet health ribbon ---------- */
+  .ribbon-wrap{ margin:16px 0 6px; }
+  .ribbon{ display:flex; height:16px; border-radius:8px; overflow:hidden;
+           border:1px solid var(--border); background:var(--card-2);}
+  .ribbon i{ display:block; height:100%; transition:width .6s ease; }
+  .ribbon-legend{ display:flex; gap:18px; margin-top:8px; flex-wrap:wrap;}
+  .ribbon-legend span{ display:flex; align-items:center; gap:6px;
+    font-size:11.5px; color:var(--muted); }
+  .ribbon-legend b{ color:var(--text); font-weight:700; }
+  .ribbon-legend i{ width:9px; height:9px; border-radius:3px; display:inline-block; }
+
+  /* ---------- tool chips ---------- */
+  .chip{
+    position:relative; border-radius:14px; padding:12px 14px 12px 16px; min-height:98px;
+    background:var(--card); border:1px solid var(--border);
+    transition:transform .15s ease, box-shadow .15s ease; overflow:hidden;
+  }
+  .chip:hover{ transform:translateY(-2px); box-shadow:0 10px 24px rgba(0,0,0,.4); }
+  .chip::before{ content:''; position:absolute; left:0; top:10px; bottom:10px;
+                 width:4px; border-radius:0 4px 4px 0; }
+  .chip .slot{ font-size:10.5px; font-weight:800; letter-spacing:1.2px; color:var(--muted); }
+  .chip .name{ font-size:13px; font-weight:600; color:var(--text); margin:3px 0 9px;
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+               padding-right:46px;}
+  .chip .pill{
+    display:inline-block; font-size:9.5px; font-weight:800; letter-spacing:1px;
+    padding:3px 10px; border-radius:999px;
+  }
+  .chip .conf{ position:absolute; top:11px; right:12px; font-size:10.5px;
+               color:var(--muted); font-variant-numeric:tabular-nums;
+               background:rgba(11,18,32,.5); border:1px solid var(--border);
+               border-radius:6px; padding:1px 6px;}
+  .chip.present::before  { background:var(--teal); }
+  .chip.present .pill    { color:#5EEAD4; background:rgba(45,212,191,.14); }
+  .chip.missing { border-color:rgba(251,113,133,.5);
+                  background:linear-gradient(180deg, rgba(251,113,133,.10), var(--card));
+                  animation:blink-soft 1.6s ease-in-out infinite; }
+  .chip.missing::before { background:var(--rose); }
+  .chip.missing .pill    { color:#FDA4AF; background:rgba(251,113,133,.16); }
+  .chip.misplaced { border-color:rgba(251,191,36,.45);
+                    background:linear-gradient(180deg, rgba(251,191,36,.09), var(--card));
+                    animation:blink-soft 2.2s ease-in-out infinite; }
+  .chip.misplaced::before{ background:var(--amber); }
+  .chip.misplaced .pill   { color:#FCD34D; background:rgba(251,191,36,.14); }
+
+  /* ---------- alert rows ---------- */
+  .alert-row{
+    display:flex; gap:10px; align-items:flex-start;
+    background:var(--card-2); border:1px solid var(--border);
+    border-left-width:4px; border-radius:12px; padding:10px 12px; margin-bottom:8px;
+  }
+  .alert-row .tag{
+    font-size:9.5px; font-weight:800; letter-spacing:1px; padding:3px 8px;
+    border-radius:6px; margin-top:1px; white-space:nowrap;
+  }
+  .alert-row .msg{ font-size:12.5px; color:var(--text); line-height:1.4;}
+  .alert-row .ts { color:var(--muted); font-size:10.5px; margin-top:2px;
+                   font-variant-numeric:tabular-nums;}
+  .alert-critical{ border-left-color:var(--rose); }
+  .alert-critical .tag{ color:#FDA4AF; background:rgba(251,113,133,.14);}
+  .alert-warning { border-left-color:var(--amber); }
+  .alert-warning  .tag{ color:#FCD34D; background:rgba(251,191,36,.14);}
+  .alert-info    { border-left-color:var(--teal); }
+  .alert-info     .tag{ color:#5EEAD4; background:rgba(45,212,191,.14);}
+
+  /* ---------- panels (right column) ---------- */
+  .panel{
+    background:var(--card); border:1px solid var(--border);
+    border-radius:16px; padding:16px 18px; margin-bottom:16px;
+  }
+  .panel-title{
+    display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:700;
+    color:var(--text); margin-bottom:12px; letter-spacing:.2px;
+  }
+  .panel-title .count{
+    margin-left:auto; font-size:10px; color:var(--muted); font-weight:600;
+    letter-spacing:1px;
+  }
+
+  /* ---------- list rows ---------- */
+  .row-item{
+    display:flex; justify-content:space-between; align-items:center; gap:8px;
+    padding:9px 12px; border-radius:10px; background:var(--card-2);
+    margin-bottom:6px; font-size:12.5px; color:var(--text);
+  }
+  .row-item .code{
+    font-weight:800; font-size:10.5px; color:var(--sky); letter-spacing:.6px;
+    background:rgba(56,189,248,.1); border:1px solid rgba(56,189,248,.25);
+    border-radius:6px; padding:2px 7px; margin-right:9px;
+  }
+  .row-item .meta{ white-space:nowrap; }
+
+  /* ---------- footer ---------- */
+  .foot{
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;
+    gap:8px; margin-top:26px; padding:14px 6px 4px; border-top:1px solid var(--border);
+    color:var(--muted); font-size:11.5px;
+  }
+  .foot b{ color:var(--text); }
+
+  /* ---------- streamlit native widgets on dark ---------- */
+  [data-testid="stToggle"] label span{ color:var(--muted) !important; }
+  [data-baseweb="select"] > div{
+    background:var(--card-2) !important; border:1px solid var(--border) !important;
+    border-radius:10px !important;
+  }
+  [data-baseweb="select"] span{ color:var(--text) !important; }
+  .stTextInput input{
+    background:var(--card-2) !important; border:1px solid var(--border) !important;
+    border-radius:10px !important;
+  }
+  .stTextInput > div > div > div:nth-child(3){ background:var(--card-2); }
+  [data-baseweb="radio"] label{ color:var(--text); }
+  [data-baseweb="radio"] input{ accent-color:var(--teal); }
+  h3{ color:var(--text) !important; }
+  .stAlert{ background:var(--card) !important; border:1px solid var(--border);
+            border-radius:12px; }
+  [data-testid="stFormSubmitButton"] button, button[kind="widget"]{
+    background: linear-gradient(135deg, var(--teal), #14B8A6) !important;
+    color:#04222B !important; font-weight:700; border:none !important;
+    border-radius:12px !important; width:100%;
+  }
+  [data-testid="stFormSubmitButton"] button:hover{ filter:brightness(1.1);
+    box-shadow:0 6px 18px rgba(45,212,191,.35); }
+
+  .chip.borrowed{ border-color:rgba(56,189,248,.45);
+                  background:linear-gradient(180deg, rgba(56,189,248,.10), var(--card)); }
+  .chip.borrowed::before{ background:var(--sky); }
+  .chip.borrowed .pill  { color:#7DD3FC; background:rgba(56,189,248,.14); }
+  .chip .who{ font-size:10px; color:#7DD3FC; margin-top:4px; white-space:nowrap;
+              overflow:hidden; text-overflow:ellipsis; }
+  /* scrollbars */
+  ::-webkit-scrollbar{ width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb{ background:#24344D; border-radius:9px; }
+  ::-webkit-scrollbar-track{ background:transparent; }
+  /* hide streamlit default chrome */
+  #MainMenu, footer { visibility:hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ---------- helpers ----------
+def time_ago(ts_str):
+    try:
+        dt = datetime.fromisoformat(ts_str)
+        sec = (datetime.now() - dt).total_seconds()
+        if sec < 10:    return "just now"
+        if sec < 60:    return f"{int(sec)}s ago"
+        if sec < 3600:  return f"{int(sec // 60)}m ago"
+        return f"{int(sec // 3600)}h ago"
+    except Exception:
+        return ""
+
+
+# ================= RUN DETECTION =================
+results = detector.detect_frame()   # {slot: {status, confidence}}
+
+# de-duplicate alerts: จำกฬาย alert เดิม ที่เกิดในช่วง cooldown
+ALERT_COOLDOWN = 300  # วินาที (5 นาที) — กันสแปมทั้งหน้าเว็บและ LINE
+if "_alert_state" not in st.session_state:
+    st.session_state["_alert_state"] = {}   # {key: last_ts_seconds}
+
+
+def _should_alert(key, atype, slot):
+    """ดัดดูปลิกเออเลอร์ท: จำกดการเตือนซ้ำในช่วงคูลดาวน์ (เช็กตอดียับั้ทึก อย่าวาย)"""
+    if "_alert_state" not in st.session_state:
+        st.session_state["_alert_state"] = {}
+    if key not in st.session_state["_alert_state"]:
+        # ครั้งแรก: ดับเบิลเช็กตอดียับั้ทึก (แมsession รีเซ็ตก็ไม่เตือนซ้า)
+        if db.recent_alert_exists(atype, slot, seconds=ALERT_COOLDOWN):
+            st.session_state["_alert_state"][key] = time.time()
+            return False
+        st.session_state["_alert_state"][key] = time.time()
+        return True
+    now_ts = time.time()
+    last = st.session_state["_alert_state"][key]
+    if now_ts - last >= ALERT_COOLDOWN:
+        if db.recent_alert_exists(atype, slot, seconds=ALERT_COOLDOWN):
+            st.session_state["_alert_state"][key] = now_ts
+            return False
+        st.session_state["_alert_state"][key] = now_ts
+        return True
+    return False
+
+
+bmap = db.borrowed_map()
+_miss = st.session_state.setdefault("_miss_streak", {})
+for slot, r in results.items():
+    user = bmap.get(slot)
+    disp = "borrowed" if user else r["status"]
+    if disp == "missing":
+        _miss[slot] = _miss.get(slot, 0) + 1
+    else:
+        _miss.pop(slot, None)
+    db.update_tool_status(slot, disp, borrowed_by=user)
+    db.log_detection(slot, "borrowed" if user else r["status"], r["confidence"])
+    name = config.NAME_BY_SLOT[slot]
+    if r["status"] == "missing" and not user:
+        if _miss.get(slot, 0) >= 2 and _should_alert(f"missing:{slot}", "missing", slot):
+            line_alert.alert_missing(name, slot)
+            db.add_alert("missing", "critical", f"{name} ({slot}) หายจากบอรด", slot)
+    elif r["status"] == "misplaced" and not user:
+        if _should_alert(f"misplaced:{slot}", "misplaced", slot):
+            line_alert.alert_misplaced(name, slot)
+            db.add_alert("misplaced", "warning",
+                         f"{name} วางผิ่ดตำแหน่่่ง (คาดว่่า {slot})", slot)
+
+# calibration reminders — ตื่่นหนึ่่งครั้่ง/วั้นตอ slot
+for c in db.calibration_due_soon():
+    if _should_alert(f"cal:{c['slot_id']}", "calibration", c["slot_id"]):
+        line_alert.alert_calibration(c["tool_name"], c["slot_id"], c["days_left"])
+        db.add_alert("calibration", "warning",
+                     f"{c['tool_name']} ({c['slot_id']}) ครบกำหนด Calibration ในอื่ก "
+                     f"{c['days_left']} วาน",
+                     c["slot_id"])
+
+summary = db.status_summary()
+
+
+# ================= LIVE CONSOLE =================
+now = time.localtime()
+clock    = time.strftime("%H:%M:%S", now)
+date_str = time.strftime("%d %b %Y", now)
+total    = len(config.TOOLS)
+n_missing = summary.get("missing", 0)
+n_offsum  = summary.get("misplaced", 0)
+n_oksum   = summary.get("present", 0)
+n_borrow  = summary.get("borrowed", 0)
+if n_missing:
+    health, health_color = "ATTENTION REQUIRED", config.COLOR["missing"]
+elif n_offsum:
+    health, health_color = "POSITION DEVIATION", config.COLOR["misplaced"]
+else:
+    health, health_color = "ALL SYSTEMS NOMINAL", config.COLOR["present"]
+
+st.markdown(f"""
+<div class="console">
+  <div class="seg"><span class="live-dot"></span><span>LIVE</span></div>
+  <div class="sep"></div>
+  <div class="seg">🕐 <b>{clock}</b> &nbsp;{date_str}</div>
+  <div class="sep"></div>
+  <div class="seg">🖥️ <b>Board</b> 3×4 &nbsp;·&nbsp; {total} Slots</div>
+  <div class="sep"></div>
+  <div class="seg" style="border-color:{health_color}55">
+    <span class="blink" style="color:{health_color}">●</span>
+    <b style="color:{health_color}">{health}</b></div>
+  <div style="flex:1"></div>
+  <div class="seg">📡 YOLOv8 <b>{'DEMO' if detector.demo else ('REAL CAM' if detector.source == 'camera' else 'VIDEO SIM')}</b></div>
+  <div class="seg">\U0001F4E6 <b>{n_borrow}</b> Borrowed</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ================= HEADER =================
+left_head, right_head = st.columns([0.82, 0.18], vertical_alignment="center")
+with left_head:
+    status_line = (f"ระบบตรวจสอบเครื่องมือ {len(config.TOOLS)} ตัว • YOLOv8 • "
+                   f"Dashboard + LINE Alert")
+    st.markdown(f"""
+    <div class="brand">
+      <div class="brand-icon">🛠️</div>
+      <div>
+        <h1>{config.APP_TITLE}</h1>
+        <p>{status_line}</p>
+      </div>
+    </div>""", unsafe_allow_html=True)
+
+with right_head:
+    if detector.demo:
+        st.markdown('<div class="mode mode-demo" style="margin-bottom:10px">'
+                    '<span class="dot"></span>DEMO MODE</div>',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="mode mode-live" style="margin-bottom:10px">'
+                    '<span class="dot"></span>LIVE (YOLOv8)</div>',
+                    unsafe_allow_html=True)
+    auto = st.toggle("Auto-refresh", value=True)
+    st.markdown(f'<p class="sec-sub" style="text-align:right">'
+                f'รีเฟรชทุก {config.REFRESH_SEC} วิ</p>',
+                unsafe_allow_html=True)
+
+# ================= KPI ROW =================
+n_total = summary["total"]
+n_ok    = summary.get("present", 0)
+n_miss  = summary.get("missing", 0)
+n_off   = summary.get("misplaced", 0)
+pct = lambda v: int(v * 100 / n_total) if n_total else 0
+_n_rows = len({t["slot_id"][0] for t in config.TOOLS})
+
+k1, k2, k3, k4 = st.columns(4)
+kpis = [
+    # (css-class, icon, label, value, bar-color, sub-text)
+    ("total", "🧰", "Total Slots", n_total, "var(--sky)",
+     f"{_n_rows}×{config.BOARD_COLS} board layout"),
+    ("ok",    "✅", "Present",     n_ok, "var(--teal)",
+     f"{pct(n_ok)}% fleet availability"),
+    ("miss",  "❌", "Missing",     n_miss, "var(--rose)",
+     "requires action" if n_miss else "none — good"),
+    ("borrow", "📦", "Borrowed",   n_borrow, "var(--sky)",
+     "out on loan now" if n_borrow else "none - good"),
+]
+for col, (cls, icon, label, val, bar, sub) in zip([k1, k2, k3, k4], kpis):
+    w = 100 if cls == "total" else pct(val)
+    col.markdown(
+        f"<div class='kpi {cls}'><div class='ic'>{icon}</div>"
+        f"<div class='num'>{val}</div><div class='lbl'>{label}</div>"
+        f"<div class='bar'><i style='width:{w}%;background:{bar}'></i></div>"
+        f"<div class='pct'>{sub}</div></div>",
+        unsafe_allow_html=True)
+
+# ---- Fleet health ribbon ----
+st.markdown(f"""
+<div class="ribbon-wrap">
+  <div class="ribbon">
+    <i style="width:{pct(n_ok)}%;background:var(--teal)"></i>
+    <i style="width:{pct(n_off)}%;background:var(--amber)"></i>
+    <i style="width:{pct(n_borrow)}%;background:var(--sky)"></i>
+    <i style="width:{pct(n_miss)}%;background:var(--rose)"></i>
+  </div>
+  <div class="ribbon-legend">
+    <span><i style="background:var(--teal)"></i>Present <b>{n_ok}</b></span>
+    <span><i style="background:var(--amber)"></i>Misplaced <b>{n_off}</b></span>
+    <span><i style="background:var(--rose)"></i>Missing <b>{n_miss}</b></span>
+    <span><i style="background:var(--sky)"></i>Borrowed <b>{n_borrow}</b></span>
+    <span style="margin-left:auto">Fleet availability <b style="color:var(--teal)">{pct(n_ok)}%</b></span>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+# ================= MAIN GRID =================
+left, right = st.columns([0.62, 0.38])
+
+# ---- Tool status grid ----
+with left:
+    tools = db.get_all_tools()
+    row_prefixes = sorted({t["slot_id"][0] for t in tools})
+    rows = [[t for t in tools if t["slot_id"].startswith(prefix)]
+            for prefix in row_prefixes]
+
+    conf_by_slot = {s: r.get("confidence") for s, r in results.items()}
+
+    st.markdown(
+        f"""<div class="sec-title"><span class="num">01</span> 📋 Tool Status
+            <span class="sec-sub">{len(rows)}×{config.BOARD_COLS} BOARD</span></div>""",
+        unsafe_allow_html=True)
+
+    def render_row(row):
+        cols = st.columns(config.BOARD_COLS)
+        for col, t in zip(cols, row):
+            status = t["status"]
+            pill = {"present": "PRESENT", "missing": "MISSING",
+                    "misplaced": "MISPLACED", "borrowed": "BORROWED"}.get(status, status.upper())
+            conf = conf_by_slot.get(t["slot_id"])
+            conf_html = (f"<span class='conf'>{int(conf * 100)}%</span>"
+                         if conf else "")
+            who = t.get("borrowed_by")
+            who_html = (f"<div class='who'>\U0001F4E6 {who}</div>"
+                        if who and status == "borrowed" else "")
+            col.markdown(
+                f"<div class='chip {status}'>{conf_html}"
+                f"<div class='slot'>{t['slot_id']}</div>"
+                f"<div class='name'>{t['name']}</div>"
+                f"{who_html}"
+                f"<span class='pill'>{pill}</span></div>",
+                unsafe_allow_html=True)
+    for row in rows:
+        render_row(row)
+
+    # ---- Usage Analytics chart ----
+    st.markdown(
+        """<div class="sec-title"><span class="num">02</span> 📈 Usage Analytics
+           <span class="sec-sub">เครื่องมือใช้บ่อย</span></div>""",
+        unsafe_allow_html=True)
+    stats = db.usage_stats()
+    if stats:
+        df = pd.DataFrame(stats)
+        fig = go.Figure(go.Bar(
+            x=df["tool_name"], y=df["times"],
+            marker_color=config.COLOR["present"],
+            opacity=0.9,
+            text=df["times"], textposition="outside",
+            textfont=dict(color="#8DA2B8", size=12)))
+        fig.update_layout(
+            height=290, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter, Segoe UI, sans serif", color="#E7EEF6"),
+            xaxis=dict(showgrid=False, showline=True,
+                       linecolor="#24344D",
+                       tickfont=dict(color="#8DA2B8", size=10.5),
+                       tickangle=-35),
+            yaxis=dict(gridcolor="#1E2C44", zerolinecolor="#24344D",
+                       tickfont=dict(color="#8DA2B8", size=11),
+                       title=dict(text="จำนวนครั้งที่ยืม",
+                                  font=dict(size=11, color="#8DA2B8"))),
+            bargap=0.35)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("ยังไม่มีข้อมูลการยืม — ลองบันทึกการ Check-out ด้านขวา")
+    # ---- section 03: calibration due (moved here from right col to balance layout) ----
+    due = db.calibration_due_soon()
+    st.markdown(
+        f"""<div class="sec-title"><span class="num">03</span> 🔧 ใกล้ครบกำหนด
+           <span class="sec-sub">{len(due)} DUE</span></div>""",
+        unsafe_allow_html=True)
+    if due:
+        for c in due:
+            urgent = c["days_left"] <= 3
+            color = config.COLOR["missing"] if urgent else config.COLOR["misplaced"]
+            emoji = "⚠️" if urgent else "🔧"
+            st.markdown(
+                f"<div class='row-item'><div>"
+                f"<span class='code'>{c['slot_id']}</span>{c['tool_name']}</div>"
+                f"<span class='meta' style='color:{color};font-weight:700'>"
+                f"{emoji} เหลือ {c['days_left']} วัน</span></div>",
+                unsafe_allow_html=True)
+    else:
+        st.markdown("<div class='sec-sub'>ยังไม่มีเครื่องมือใกล้ครบกำหนด</div>",
+                    unsafe_allow_html=True)
+# live presence trend (last 2h from detections DB)
+_trend = db.trend_presence(minutes=120)
+_trend_hdr = ('<div class="panel">'
+              '<div class="panel-title">\U0001F4C9 Live Presence Trend '
+              '<span class="count">LAST 2H</span></div>')
+st.markdown(_trend_hdr, unsafe_allow_html=True)
+if _trend:
+    _tf = go.Figure(go.Scatter(
+        x=[p["ts"] for p in _trend], y=[p["rate"] for p in _trend],
+        mode="lines+markers",
+        line=dict(color=config.COLOR["present"], width=2),
+        marker=dict(size=4),
+        hovertemplate="%{x} - %{y:.0%}<extra></extra>"))
+    _tf.add_hline(y=0.9, line_dash="dot", line_color="#24344D")
+    _tf.update_layout(height=200, margin=dict(l=10, r=10, t=5, b=5),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, Segoe UI, sans serif", color="#E7EEF6"),
+        xaxis=dict(showgrid=False, tickfont=dict(color="#8DA2B8", size=10),
+                   title=dict(text="time", font=dict(size=10, color="#8DA2B8"))),
+        yaxis=dict(gridcolor="#1E2C44", tickformat=".0%",
+                   tickfont=dict(color="#8DA2B8", size=10),
+                   title=dict(text="present ratio", font=dict(size=10, color="#8DA2B8"))))
+    st.plotly_chart(_tf, use_container_width=True)
+else:
+    st.markdown("<div class='sec-sub'>collecting detections - trend appears after a few minutes</div>",
+                unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ---- Right column: panels ----
+with right:
+    # ----- Alerts panel -----
+    alerts = db.get_alerts(limit=6)
+    st.markdown(f"""<div class="panel">
+      <div class="panel-title">🔔 Recent Alerts
+        <span class="count">LAST {len(alerts)} EVENTS</span></div>
+    </div>""", unsafe_allow_html=True)
+    if alerts:
+        for a in alerts:
+            sev = ("critical" if a["severity"] == "critical"
+                   else "warning" if a["severity"] == "warning" else "info")
+            ts_plain = a["ts"].split("T")[-1][:8] if "T" in a["ts"] else a["ts"][:19]
+            ts = f"{ts_plain}  ·  {time_ago(a['ts'])}".strip()
+            st.markdown(
+                f"<div class='alert-row alert-{sev}'>"
+                f"<span class='tag'>{a['atype'].upper()}</span>"
+                f"<div><div class='msg'>{a['message']}</div>"
+                f"<div class='ts'>{ts}</div></div></div>",
+                unsafe_allow_html=True)
+    else:
+        st.markdown("<div class='sec-sub'>ไม่มีการแจ้งเตือน ✅</div>",
+                    unsafe_allow_html=True)
+
+    # ----- Quick return + manual form (primary UX) -----
+    st.markdown("""<div class="panel">
+      <div class="panel-title">\U0001F516 Loan Check-in &amp; Check-out
+        <span class="count">QUICK RETURN</span></div>""",
+                unsafe_allow_html=True)
+    _open_co = [x for x in db.get_checkouts(limit=1000) if not x["return_at"]]
+    if _open_co:
+        for x in _open_co[:6]:
+            _c1, _c2 = st.columns([0.58, 0.42])
+            _c1.markdown(
+                f"<div class='row-item' style='margin-top:2px'><div>"
+                f"<span class='code'>{x['slot_id']}</span> {x['tool_name']}"
+                f" &middot; {x['user_name']}</div>"
+                f"<span class='meta'>out since {x['checkout_at'][11:16]}</span></div>",
+                unsafe_allow_html=True)
+            if _c2.button("\u2B05 Return", key=f"qret_{x['id']}"):
+                db.return_tool(x["slot_id"])
+                line_alert.alert_checkin(x["tool_name"], x["slot_id"], x["user_name"])
+                st.toast(f"Returned {x['slot_id']} - {x['tool_name']}")
+                st.rerun()
+    else:
+        st.markdown("<div class='sec-sub'>no open loans right now</div>",
+                    unsafe_allow_html=True)
+    with st.expander("+ Manual check-out / return (pick slot + name)",
+                     expanded=False):
+        with st.form("checkout_form", clear_on_submit=True):
+            slot = st.selectbox("เครื่องมือ (Slot)",
+                                [f"{t['slot_id']} — {t['name']}" for t in tools])
+            user = st.text_input("ชื่่อผู้ยืม", placeholder="เช่่น Sirinya")
+            action = st.radio("การ ทำงาน", ["ยืม (Check-out)", "คืน (Check-in)"],
+                              horizontal=True)
+            submitted = st.form_submit_button("บันทึก", use_container_width=True)
+            if submitted and user:
+                sid = slot.split(" — ")[0]
+                if action.startswith("ยืม"):
+                    db.checkout_tool(sid, user)
+                    line_alert.alert_checkout(config.NAME_BY_SLOT.get(sid, sid), sid, user)
+                    st.success(f"บันทึกการยืม {sid} โดย {user}")
+                else:
+                    db.return_tool(sid)
+                    line_alert.alert_checkin(config.NAME_BY_SLOT.get(sid, sid), sid, user)
+                    st.success(f"บันทึกการคืน {sid}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ----- History panel -----
+    _hmode = st.radio("loan view", ["Open", "All"], horizontal=True,
+                      key="hist_mode", label_visibility="collapsed")
+    _all_co2 = db.get_checkouts(limit=1000)
+    co = ([x for x in _all_co2 if not x["return_at"]]
+          if _hmode == "Open" else _all_co2)[:6]
+    co = db.get_checkouts(limit=6)
+    st.markdown(f"""<div class="panel">
+      <div class="panel-title">📚 ประวัติการยืม
+        <span class="count">LAST {len(co)}</span></div>""",
+                unsafe_allow_html=True)
+    if co:
+        for r in co:
+            if r["return_at"]:
+                status_txt, status_color = "🟢 คืนแล้ว", config.COLOR["present"]
+            else:
+                status_txt, status_color = "🔴 ยังไม่คืน", config.COLOR["missing"]
+            st.markdown(
+                f"<div class='row-item'><div>"
+                f"<span class='code'>{r['slot_id']}</span>"
+                f"{r['tool_name']} · {r['user_name']}</div>"
+                f"<span class='meta' style='color:{status_color};font-weight:700'>"
+                f"{status_txt}</span></div>",
+                unsafe_allow_html=True)
+    else:
+        st.markdown("<div class='sec-sub'>ยังไม่มีประวัติการยืม</div>",
+                    unsafe_allow_html=True)
+    # export checkout history to CSV (utf-8 BOM, Excel-safe)
+    all_co = db.get_checkouts(limit=100000)
+    if all_co:
+        _co_csv = (",".join(all_co[0].keys()) + "\n" +
+                   "\n".join(",".join(
+                       str(v).replace('"', '""') if v is not None else ""
+                       for v in r.values()) for r in all_co) + "\n")
+        st.download_button(
+            "📥 Export ประวาริยืม (CSV)",
+            data=_co_csv.encode("utf-8-sig"),
+            file_name=f"checkouts_{datetime.now():%Y%m%d_%H%M}.csv",
+            mime="text/csv", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ================= SYSTEM & DATA (full width — balances the two columns) =================
+st.markdown(
+    """<div class="sec-title"><span class="num">04</span> 🔧 System & Data
+       <span class="sec-sub">DETECTION LOG · RESET</span></div>""",
+    unsafe_allow_html=True)
+_sl, _sm, _sr = st.columns([0.42, 0.31, 0.27])
+with _sl:
+    st.markdown("""<div class="panel" style="margin-bottom:0">
+      <div class="panel-title">📄 Detection Log
+        <span class="count">CSV TRACKING</span></div>""",
+                unsafe_allow_html=True)
+    try:
+        with open(config.CSV_PATH, encoding="utf-8") as _cf:
+            n_csv = sum(1 for _ in _cf) - 1
+    except OSError:
+        n_csv = 0
+    st.markdown(
+        f"<div class='sec-sub'>Every detection is appended to<br>"
+        f"<code style='font-size:0.85em'>{os.path.basename(config.CSV_PATH)}</code>"
+        f" · {n_csv:,} rows since last reset</div>",
+        unsafe_allow_html=True)
+    if n_csv > 0 and os.path.exists(config.CSV_PATH):
+        with open(config.CSV_PATH, "rb") as _f:
+            st.download_button(
+                "📥 Export Detection CSV",
+                data=_f.read(),
+                file_name=f"detections_{datetime.now():%Y%m%d_%H%M}.csv",
+                mime="text/csv", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+with _sm:
+    st.markdown("""<div class="panel" style="margin-bottom:0">
+      <div class="panel-title">\U0001F9FE Reports
+        <span class="count">SUMMARY</span></div>""",
+                unsafe_allow_html=True)
+    st.markdown(
+        "<div class='sec-sub'>One-file snapshot: board status, loans, "
+        "usage, alerts and calibration due dates.</div>",
+        unsafe_allow_html=True)
+    # weekly / demo report (multi-section summary CSV)
+    def _weekly_csv():
+        rows = ["section,item,value"]
+        for t in db.get_all_tools():
+            rows.append(f"board,{t['slot_id']} {t['name']},{t['status']}")
+        _co = db.get_checkouts(limit=100000)
+        rows.append(f"checkouts,total_records,{len(_co)}")
+        rows.append(f"checkouts,currently_borrowed,"
+                    f"{sum(1 for x in _co if not x['return_at'])}")
+        for _i, _s in enumerate(db.usage_stats()[:5], 1):
+            rows.append(f"top_used,{_i}," + f"{_s['tool_name']},{_s['times']}")
+        _al = db.get_alerts(limit=100000)
+        for _sev in ("critical", "warning", "info"):
+            rows.append(f"alerts,{_sev},"
+                        f"{sum(1 for a in _al if a['severity'] == _sev)}")
+        for c in db.calibration_due_soon():
+            rows.append(f"calibration_due,{c['slot_id']} {c['tool_name']},"
+                        + f"{c['days_left']}d")
+        rows.append(f"detections,csv_rows,{n_csv:,}")
+        return "\n".join(rows) + "\n"
+    st.download_button(
+        "\U0001F4CA Export Report (CSV)",
+        data=_weekly_csv().encode("utf-8-sig"),
+        file_name=f"report_{datetime.now():%Y%m%d_%H%M}.csv",
+        mime="text/csv", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+with _sr:
+    st.markdown("""<div class="panel" style="margin-bottom:0">
+      <div class="panel-title">🔄 System Reset
+        <span class="count">RESET</span></div>""",
+                unsafe_allow_html=True)
+    st.markdown(
+        "<div class='sec-sub'>Restores all tools to present and clears<br>"
+        "checkout history, alerts and the detection CSV log.</div>",
+        unsafe_allow_html=True)
+    if st.button("🔄 Reset ระบบ", use_container_width=True):
+        db.reset_system()
+        st.toast("🔄 Reset ระบบ ✅")
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ================= FOOTER =================
+_line_mode = ("LINE Alert (LIVE)"
+               if (config.LINE_CHANNEL_ACCESS_TOKEN and config.LINE_TARGET_ID)
+               else "LINE Alert (SAFE MODE)")
+st.markdown(f"""
+<div class="foot">
+  <div>🛠️ <b>{config.APP_TITLE}</b> — ENG51 1705</div>
+  <div>YOLOv8 · Streamlit · SQLite · {_line_mode} &nbsp;|&nbsp;
+    <span style="color:var(--teal)">● System Operational</span></div>
+</div>
+""", unsafe_allow_html=True)
+
+# ================= AUTO REFRESH =================
+if auto:
+    time.sleep(config.REFRESH_SEC)
+    st.rerun()
